@@ -1,3 +1,8 @@
+#ignore heavy files (dataset and pretrained model)
+pretrained_model/
+MedleyVox/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
