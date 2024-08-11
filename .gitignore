@@ -2,6 +2,7 @@
 pretrained_model/
 MedleyVox/
 output/
+output_test/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
