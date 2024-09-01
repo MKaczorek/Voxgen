@@ -3,6 +3,12 @@ pretrained_model/
 MedleyVox/
 output/
 output_test/
+output_euler_39/
+output_test_euler/
+output_euler/
+output_euler_1/
+output_heun_no_cond/
+output_heun_no_cond_restart/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

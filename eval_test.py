@@ -9,66 +9,14 @@ from math import sqrt
 from asteroid.metrics import get_metrics
 from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
 import soundfile as sf
+from samplers.samplers import restart, euler, heun, sde, avg, restart_sampler, sde_pred
 
 from medley_vox import MedleyVox
 
 COMPUTE_METRICS = ["si_sdr", "sdr"]
 
 
-@torch.no_grad()
-def separate_mixture(
-    mixture: torch.Tensor,
-    noises: torch.Tensor,
-    denoise_fn: Callable,
-    sigmas: torch.Tensor,
-    cond: Optional[torch.Tensor] = None,
-    cond_index: int = 0,
-    s_churn: float = 40.0,  # > 0 to add randomness
-    num_resamples: int = 2,
-    use_tqdm: bool = False,
-    gaussian: bool = False,
-):
-    # Set initial noise
-    x = sigmas[0] * noises  # [num-sources, sample-length]
-    
 
-    for i in tqdm(range(len(sigmas) - 1), disable=not use_tqdm):
-        sigma, sigma_next = sigmas[i], sigmas[i + 1]
-
-        for r in range(num_resamples):
-            # Inject randomness
-            gamma = min(s_churn / (len(sigmas) - 1), 2**0.5 - 1)
-            sigma_hat = sigma * (gamma + 1)
-            x = x + torch.randn_like(x) * (sigma_hat**2 - sigma**2) ** 0.5
-
-            if cond is not None:
-                noisey_cond = cond + torch.randn_like(cond) * sigma
-                x[:, :cond_index] = noisey_cond
-
-            # Compute conditioned derivative
-            if not gaussian:
-                x[:1] = mixture - x[1:].sum(dim=0, keepdim=True)   
-            score = (x - denoise_fn(x, sigma=sigma)) / sigma
-            if gaussian:
-                d = score + sigma / (2 * gamma**2) * (mixture - x.sum(dim=0))
-                x += d * (sigma_next - sigma_hat)
-            else:
-                ds = score[1:] - score[:1]
-
-                
-
-                
-
-                # Update integral
-                x[1:] += ds * (sigma_next - sigma_hat)
-                #update second source
-                x[:1] = mixture - x[1:].sum(dim=0, keepdim=True)  
-
-            # Renoise if not last resample step
-            if r < num_resamples - 1:
-                x = x + torch.sqrt(sigma**2 - sigma_next**2) * torch.randn_like(x)
-
-    return x
 
 if __name__ == "__main__":
 
@@ -88,6 +36,7 @@ if __name__ == "__main__":
   parser.add_argument("--full-duet", action="store_true", help="Drop duet songs")
   parser.add_argument("--retry", type=int, default=0, help="Retry")
   parser.add_argument("--outer-retry", type=int, default=0, help="Outer retry")
+  parser.add_argument("--sampler", default='euler', type=str, help="sampler name")
 
   args = parser.parse_args()
 
@@ -97,6 +46,8 @@ if __name__ == "__main__":
         cfg = hydra.compose(config_name=config_name)
 
 
+  #restart info
+  restart_info = '{"0": [10, 3, 19.35, 40.79], "1": [10, 3, 1.09, 1.92], "2": [7, 6, 0.59, 1.09], "3": [7, 6, 0.30, 0.59], "4": [7, 25, 0.06, 0.30]}'
   #import lenght and sampling rate from the config file
   sr = cfg.sampling_rate
   length = cfg.length
@@ -124,6 +75,7 @@ if __name__ == "__main__":
         return inner_denoise_fn(x, sigma=sigma).squeeze(1)
 
   sigmas = diffusion_schedule(args.T, "cuda")
+  print(sigmas)
 
   dataset = MedleyVox(
         args.medleyvox,
@@ -168,7 +120,7 @@ if __name__ == "__main__":
 
                       trials = []
                       for i in range(args.retry + 1):
-                          pred = separate_mixture(
+                          pred = restart(
                               sub_m,
                               noise,
                               denoise_fn,
@@ -178,6 +130,8 @@ if __name__ == "__main__":
                               cond_index=overlap_size,
                               use_tqdm=False,
                               gaussian=False,
+                              restart = False,
+                              restart_info = restart_info,
                           )
                           sub_pred = pred[:, -sub_x.numel() :]
 
@@ -205,16 +159,76 @@ if __name__ == "__main__":
                   padding = length - (original_length % length)
                   if padding < length:
                       x = torch.cat([x, x.new_zeros(padding)], dim=0)
+                  if args.sampler == 'sde':
+                    print('Sampler: SDE')
+                    result = sde(
+                        x,
+                        torch.randn(n, x.numel()).cuda(),
+                        denoise_fn,
+                        sigmas,
+                        use_tqdm=False,
+                    )[:, :original_length]
 
-                  result = separate_mixture(
-                      x,
-                      torch.randn(n, x.numel()).cuda(),
-                      denoise_fn,
-                      sigmas,
-                      s_churn=s_churn,
-                      use_tqdm=False,
-                  )[:, :original_length]
+                  if args.sampler == 'euler':
+                    print('Sampler: Euler')
+                    result = euler(
+                        x,
+                        torch.randn(n, x.numel()).cuda(),
+                        denoise_fn,
+                        sigmas,
+                        use_tqdm=False,
+                    )[:, :original_length]
 
+                  if args.sampler == 'heun':
+                    print('Sampler: Heun')
+                    result = heun(
+                        x,
+                        torch.randn(n, x.numel()).cuda(),
+                        denoise_fn,
+                        sigmas,
+                        use_tqdm=False,
+                    )[:, :original_length]
+
+                  if args.sampler == 'restart':
+                    print('Sampler: Restart')
+                    result = restart(
+                            x,
+                            torch.randn(n, x.numel()).cuda(),
+                            denoise_fn,
+                            sigmas,
+                            use_tqdm=False,
+                            restart_info = restart_info,
+                            rho = 9,
+                            restart = False,
+                        )[:, :original_length]
+                  if args.sampler == 'avg':
+                    print('Sampler: AVG')
+                    result = avg(
+                            x,
+                            torch.randn(n, x.numel()).cuda(),
+                            denoise_fn,
+                            sigmas,
+                            use_tqdm=False,
+                            
+                        )[:, :original_length]
+                    
+                  if args.sampler == 'restart_test':
+                    print('Sampler: Restart test')
+                    result = restart_sampler(
+                            denoise_fn = denoise_fn,
+                            restart_info= restart_info,
+                            noises = torch.randn(n, x.numel()).cuda(),
+                            mixture = x,          
+                        )[:, :original_length]
+                  if args.sampler == 'predictor_corector':
+                    print('Sampler: Predictor-corrector')
+                    result = sde_pred(
+                            x,
+                            torch.randn(n, x.numel()).cuda(),
+                            denoise_fn,
+                            sigmas,
+                            use_tqdm=False,        
+                        )[:, :original_length]
               loss, reordered_sources = loss_func(
                   result.unsqueeze(0), y.unsqueeze(0), return_est=True
               )
