@@ -9,11 +9,11 @@ from math import sqrt
 from asteroid.metrics import get_metrics
 from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
 import soundfile as sf
-from samplers.samplers import restart, euler, heun, sde, avg, restart_sampler, sde_pred
+from samplers.samplers import euler, heun, sde, restart_sampler
 
 from medley_vox import MedleyVox
 
-COMPUTE_METRICS = ["si_sdr", "sdr"]
+COMPUTE_METRICS = ["si_sdr", "sdr", "sir", "sar", "stoi"]
 
 
 
@@ -47,7 +47,8 @@ if __name__ == "__main__":
 
 
   #restart info
-  restart_info = '{"0": [10, 3, 19.35, 40.79], "1": [10, 3, 1.09, 1.92], "2": [7, 6, 0.59, 1.09], "3": [7, 6, 0.30, 0.59], "4": [7, 25, 0.06, 0.30]}'
+  restart_info = '{"0": [3, 1, 1.209375, 2.560625], "1": [6, 1, 0.068125, 0.12], "2": [6, 5, 0.036875, 0.068125], "3": [6, 5, 0.01875, 0.036875], "4": [6, 20, 0.00375, 0.01875]}'
+  
   #import lenght and sampling rate from the config file
   sr = cfg.sampling_rate
   length = cfg.length
@@ -120,7 +121,7 @@ if __name__ == "__main__":
 
                       trials = []
                       for i in range(args.retry + 1):
-                          pred = restart(
+                          pred = sde(
                               sub_m,
                               noise,
                               denoise_fn,
@@ -130,8 +131,6 @@ if __name__ == "__main__":
                               cond_index=overlap_size,
                               use_tqdm=False,
                               gaussian=False,
-                              restart = False,
-                              restart_info = restart_info,
                           )
                           sub_pred = pred[:, -sub_x.numel() :]
 
@@ -188,46 +187,14 @@ if __name__ == "__main__":
                         sigmas,
                         use_tqdm=False,
                     )[:, :original_length]
-
+                    
                   if args.sampler == 'restart':
                     print('Sampler: Restart')
-                    result = restart(
-                            x,
-                            torch.randn(n, x.numel()).cuda(),
-                            denoise_fn,
-                            sigmas,
-                            use_tqdm=False,
-                            restart_info = restart_info,
-                            rho = 9,
-                            restart = False,
-                        )[:, :original_length]
-                  if args.sampler == 'avg':
-                    print('Sampler: AVG')
-                    result = avg(
-                            x,
-                            torch.randn(n, x.numel()).cuda(),
-                            denoise_fn,
-                            sigmas,
-                            use_tqdm=False,
-                            
-                        )[:, :original_length]
-                    
-                  if args.sampler == 'restart_test':
-                    print('Sampler: Restart test')
                     result = restart_sampler(
                             denoise_fn = denoise_fn,
                             restart_info= restart_info,
                             noises = torch.randn(n, x.numel()).cuda(),
                             mixture = x,          
-                        )[:, :original_length]
-                  if args.sampler == 'predictor_corector':
-                    print('Sampler: Predictor-corrector')
-                    result = sde_pred(
-                            x,
-                            torch.randn(n, x.numel()).cuda(),
-                            denoise_fn,
-                            sigmas,
-                            use_tqdm=False,        
                         )[:, :original_length]
               loss, reordered_sources = loss_func(
                   result.unsqueeze(0), y.unsqueeze(0), return_est=True
